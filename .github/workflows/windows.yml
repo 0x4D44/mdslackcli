@@ -38,6 +38,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item -Path target/release/mdslackcli.exe -Destination dist/
+          Copy-Item -Path target/release/mdslackcli.exe -Destination ./mdslackcli.exe -Force
           $zipPath = "mdslackcli-windows-x86_64.zip"
           if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
           Compress-Archive -Path dist/* -DestinationPath $zipPath
@@ -46,7 +47,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mdslackcli-windows
-          path: mdslackcli-windows-x86_64.zip
+          path: |
+            mdslackcli.exe
+            mdslackcli-windows-x86_64.zip
 
   release:
     name: Release
@@ -63,7 +66,6 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: mdslackcli-windows-x86_64.zip
+          files: mdslackcli.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
