@@ -6,8 +6,8 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde_json::Value;
 
-const SERVICE: &str = "slackcli";
-const USERNAME: &str = "bot_token";
+const SERVICE: &str = "slackcli_user";
+const USERNAME: &str = "token";
 const API_BASE: &str = "https://slack.com/api";
 
 #[derive(Parser, Debug)]
@@ -18,12 +18,23 @@ struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
+#[command(rename_all = "lowercase")]
 enum Commands {
     /// Initialize credentials (stores/validates token in Windows Credential Manager)
     Init(InitArgs),
-    /// Show who the token is (team, user/bot)
+    /// Show who you are (team, user)
     Whoami,
-    /// List channels/DMs the bot can see
+    /// Join a public channel so you can read/post
+    Join(JoinArgs),
+    /// List recent 1:1 DMs you have access to
+    DirectMsgs(DirectArgs),
+    /// List recent multi-person DMs (MPIMs)
+    DirectMpMsgs(DirectArgs),
+    /// Find a person by name or email and show IDs
+    FindPerson(FindArgs),
+    /// Open a DM/MPDM with one or more users (requires conversations:write)
+    Open(OpenArgs),
+    /// List channels/DMs you can see
     Channels(ListArgs),
     /// List recent messages in a channel
     Msgs(MsgsArgs),
@@ -36,6 +47,26 @@ struct InitArgs {
     /// Clear stored token first
     #[arg(long)]
     reset: bool,
+    /// Replace existing token even if valid (re-prompt)
+    #[arg(long)]
+    force: bool,
+    /// Provide token non-interactively (xoxp-…)
+    #[arg(long)]
+    token: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct JoinArgs {
+    /// Channel ID (e.g., C01234567)
+    #[arg(long)]
+    channel: String,
+}
+
+#[derive(Args, Debug)]
+struct DirectArgs {
+    /// Max number of conversations to list
+    #[arg(long, default_value_t = 100)]
+    limit: u32,
 }
 
 #[derive(Args, Debug)]
@@ -49,7 +80,7 @@ struct ListArgs {
 
 #[derive(Args, Debug)]
 struct MsgsArgs {
-    /// Channel ID (e.g., C123… or D123…)
+    /// Channel ID (e.g., C123ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ or D123ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦)
     #[arg(long)]
     channel: String,
     #[arg(long, default_value_t = 25)]
@@ -65,6 +96,26 @@ struct SendArgs {
     /// Optional thread timestamp (to reply in a thread)
     #[arg(long)]
     thread_ts: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct FindArgs {
+    /// Substring to match against display name, real name, email, or user ID
+    #[arg(long)]
+    query: String,
+    /// Max matches to show
+    #[arg(long, default_value_t = 50)]
+    limit: usize,
+}
+
+#[derive(Args, Debug)]
+struct OpenArgs {
+    /// Comma-separated list of user IDs (e.g., U123,U456)
+    #[arg(long)]
+    users: String,
+    /// Optional text to send immediately in the opened conversation
+    #[arg(long)]
+    text: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,6 +140,148 @@ fn main() -> Result<()> {
                 "ok: {}\nteam: {:?}\nteam_id: {:?}\nuser_id: {:?}\nbot_id: {:?}",
                 info.ok, info.team, info.team_id, info.user_id, info.bot_id
             );
+            Ok(())
+        }
+        Commands::Join(args) => {
+            let token = ensure_token()?;
+            let client = http();
+            let resp = slack_post(
+                &client,
+                "conversations.join",
+                &token,
+                Some(&[("channel", args.channel.as_str())]),
+            )?;
+            let name = resp
+                .get("channel")
+                .and_then(|c| c.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("(unknown)");
+            println!("Joined #{name}");
+            Ok(())
+        }
+        Commands::DirectMsgs(args) => {
+            let token = ensure_token()?;
+            let client = http();
+            let resp = slack_post(
+                &client,
+                "conversations.list",
+                &token,
+                Some(&[("types", "im"), ("limit", &args.limit.to_string())]),
+            )?;
+            let ims = resp
+                .get("channels")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let users = fetch_users_map(&client, &token)?;
+            for im in ims {
+                let id = im.get("id").and_then(|v| v.as_str()).unwrap_or("-");
+                let uid = im.get("user").and_then(|v| v.as_str()).unwrap_or("-");
+                let (disp, real, email) =
+                    users.get(uid).cloned().unwrap_or(("?".into(), None, None));
+                let real_s = real.as_deref().unwrap_or("");
+                let email_s = email.as_deref().unwrap_or("");
+                println!("{id}\t@{disp}\t{real_s}\t{email_s}");
+            }
+            Ok(())
+        }
+        Commands::DirectMpMsgs(args) => {
+            let token = ensure_token()?;
+            let client = http();
+            let resp = slack_post(
+                &client,
+                "conversations.list",
+                &token,
+                Some(&[("types", "mpim"), ("limit", &args.limit.to_string())]),
+            )?;
+            let chans = resp
+                .get("channels")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            for ch in chans {
+                let id = ch.get("id").and_then(|v| v.as_str()).unwrap_or("-");
+                let name = ch.get("name").and_then(|v| v.as_str()).unwrap_or("(mpdm)");
+                println!("{id}\t#{name}");
+            }
+            Ok(())
+        }
+        Commands::FindPerson(args) => {
+            let token = ensure_token()?;
+            let client = http();
+            let users = fetch_users_map(&client, &token)?;
+            // Build a user -> DM channel map by listing IMs
+            let ims_resp = slack_post(
+                &client,
+                "conversations.list",
+                &token,
+                Some(&[("types", "im"), ("limit", "1000")]),
+            )?;
+            let mut user_to_dm: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            if let Some(ims) = ims_resp.get("channels").and_then(|v| v.as_array()) {
+                for im in ims {
+                    if let (Some(uid), Some(cid)) = (
+                        im.get("user").and_then(|v| v.as_str()),
+                        im.get("id").and_then(|v| v.as_str()),
+                    ) {
+                        user_to_dm.insert(uid.to_string(), cid.to_string());
+                    }
+                }
+            }
+            let q = args.query.to_lowercase();
+            let mut rows: Vec<(String, String, String, String, String)> = Vec::new();
+            for (uid, (disp, real, email)) in users.iter() {
+                let real_s = real.as_deref().unwrap_or("");
+                let email_s = email.as_deref().unwrap_or("");
+                let inq = |s: &str| s.to_lowercase().contains(&q);
+                if inq(disp) || inq(real_s) || inq(email_s) || inq(uid) {
+                    let dm = user_to_dm.get(uid).cloned().unwrap_or_else(|| "-".into());
+                    rows.push((
+                        uid.clone(),
+                        dm,
+                        format!("@{}", disp),
+                        real_s.to_string(),
+                        email_s.to_string(),
+                    ));
+                }
+            }
+            rows.truncate(args.limit);
+            for (uid, dm, atname, real, email) in rows {
+                println!("{uid}\t{dm}\t{atname}\t{real}\t{email}");
+            }
+            Ok(())
+        }
+        Commands::Open(args) => {
+            let token = ensure_token()?;
+            let client = http();
+            let users = args
+                .users
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(",");
+            let resp = slack_post(
+                &client,
+                "conversations.open",
+                &token,
+                Some(&[("users", users.as_str())]),
+            )?;
+            let channel_id = resp
+                .get("channel")
+                .and_then(|c| c.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("-");
+            println!("opened channel: {channel_id}");
+            if let Some(text) = args.text.as_deref() {
+                let _ = slack_post(
+                    &client,
+                    "chat.postMessage",
+                    &token,
+                    Some(&[("channel", channel_id), ("text", text)]),
+                );
+            }
             Ok(())
         }
         Commands::Channels(args) => {
@@ -193,6 +386,21 @@ fn init(args: InitArgs) -> Result<()> {
     if args.reset {
         let _ = delete_token();
     }
+    if args.force || args.token.is_some() {
+        let token = match args.token {
+            Some(t) => t,
+            None => prompt_for_token()?,
+        };
+        store_token(&token)?;
+        let client = http();
+        let info = auth_test(&client, &token)?;
+        if info.ok {
+            println!("Saved valid token for team {:?}.", info.team);
+            return Ok(());
+        } else {
+            return Err(anyhow!(info.error.unwrap_or_else(|| "invalid_auth".into())));
+        }
+    }
     match ensure_token() {
         Ok(_) => {
             println!("Token is present and valid.");
@@ -220,18 +428,14 @@ fn init(args: InitArgs) -> Result<()> {
 
 fn ensure_token() -> Result<String> {
     if let Some(tok) = read_token()? {
-        // Validate
         let client = http();
         let info = auth_test(&client, &tok)?;
         if info.ok {
             return Ok(tok);
         }
-        // token exists but is bad → fall through to prompt
     }
-    // Prompt & store
     let token = prompt_for_token()?;
     store_token(&token)?;
-    // Validate stored
     let client = http();
     let info = auth_test(&client, &token)?;
     if info.ok {
@@ -259,7 +463,6 @@ fn store_token(token: &str) -> Result<()> {
 }
 
 fn delete_token() -> Result<()> {
-    // keyring v3 on some backends does not expose a delete method; overwrite instead
     let entry = Entry::new(SERVICE, USERNAME)?;
     entry
         .set_password("")
@@ -318,10 +521,51 @@ fn slack_post(
     Ok(v)
 }
 
-/// Prompt user for a Slack bot token and return it.
+use std::collections::HashMap;
+
+type UserInfo = (String, Option<String>, Option<String>);
+
+/// Fetch users.list and return a map from user_id to (display_name, real_name, email)
+fn fetch_users_map(client: &Client, token: &str) -> Result<HashMap<String, UserInfo>> {
+    let mut map: HashMap<String, UserInfo> = HashMap::new();
+    let resp = slack_post(client, "users.list", token, Some(&[("limit", "200")]))?;
+    let members = resp
+        .get("members")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    for m in members {
+        if let Some(uid) = m.get("id").and_then(|v| v.as_str()) {
+            let prof = m.get("profile").cloned().unwrap_or(Value::Null);
+            let disp = prof
+                .get("display_name")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    m.get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_else(|| uid.to_string());
+            let real = prof
+                .get("real_name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let email = prof
+                .get("email")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            map.insert(uid.to_string(), (disp, real, email));
+        }
+    }
+    Ok(map)
+}
+
+/// Prompt user for a Slack user token and return it.
 fn prompt_for_token() -> Result<String> {
     let token = Password::new()
-        .with_prompt("Enter Slack bot token (e.g., xoxb-...)")
+        .with_prompt("Slack user token (xoxp-Ã¢â‚¬Â¦)")
         .interact()
         .context("failed to read token from prompt")?;
     let token = token.trim().to_string();
