@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use dialoguer::Password;
 use keyring::Entry;
 use reqwest::blocking::Client;
@@ -11,7 +11,34 @@ const USERNAME: &str = "token";
 const API_BASE: &str = "https://slack.com/api";
 
 #[derive(Parser, Debug)]
-#[command(name = "slack", version, about = "A tiny Slack CLI in Rust")]
+#[command(
+    name = "slack",
+    version,
+    about = "A tiny Slack CLI in Rust",
+    long_about = r#"A tiny, practical Slack CLI.
+
+Primary capabilities:
+- Initialize and validate a user token (stored via Windows Credential Manager).
+- Explore your workspace: whoami, channels, users, and recent messages.
+- Send messages (including threaded replies) and open DMs/MPDMs.
+
+Quick examples:
+  slack init --force
+  slack whoami
+  slack channels --types public_channel,im --limit 20
+  slack find-person --query "Jane"
+  slack open --users U123,U456 --text "Hello there!"
+  slack msgs --channel C12345678 --limit 5
+  slack send --channel C12345678 --text "Hi from the CLI"
+  slack send --channel C12345678 --text "Thread reply" --thread-ts 1712345678.000100
+
+To see detailed help for every command at once, run:
+  slack --help
+
+To see help for just one command, use:
+  slack <command> --help
+"#
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -21,24 +48,112 @@ struct Cli {
 #[command(rename_all = "lowercase")]
 enum Commands {
     /// Initialize credentials (stores/validates token in Windows Credential Manager)
+    #[command(long_about = r#"Initialize and validate a Slack user token.
+
+By default, prompts for a token (masked) and stores it in the
+Windows Credential Manager for key `slackcli_user/token`.
+
+Examples:
+  slack init
+  slack init --force
+  slack init --reset
+  slack init --token xoxp-XXXXXXXXXXXX-XXXXXXXXXXXX-XXXXXXXXXXXX-XXXXXXXXXXXXXXXXXXXXXXXX
+"#)]
     Init(InitArgs),
+
     /// Show who you are (team, user)
+    #[command(long_about = r#"Display the authenticated identity and team info.
+
+Example:
+  slack whoami
+"#)]
     Whoami,
+
     /// Join a public channel so you can read/post
+    #[command(long_about = r#"Join a public channel you know the ID for.
+Note: You generally cannot join private channels without an invite.
+
+Examples:
+  slack join --channel C12345678
+"#)]
     Join(JoinArgs),
+
     /// List recent 1:1 DMs you have access to
+    #[command(
+        alias = "direct-msgs",
+        long_about = r#"List your direct message (IM) conversations.
+
+Examples:
+  slack directmsgs
+  slack directmsgs --limit 50
+"#
+    )]
     DirectMsgs(DirectArgs),
+
     /// List recent multi-person DMs (MPIMs)
+    #[command(
+        alias = "direct-mp-msgs",
+        long_about = r#"List multi-person direct message conversations (MPIMs).
+
+Examples:
+  slack directmpmsgs
+  slack directmpmsgs --limit 50
+"#
+    )]
     DirectMpMsgs(DirectArgs),
+
     /// Find a person by name or email and show IDs
+    #[command(
+        alias = "find-person",
+        long_about = r#"Search for users by display name, real name, email, or user ID.
+Outputs: user_id, DM channel (if any), @display_name, real_name, email.
+
+Examples:
+  slack find-person --query "Jane Doe"
+  slack find-person --query jane@example.com --limit 5
+"#
+    )]
     FindPerson(FindArgs),
+
     /// Open a DM/MPDM with one or more users (requires conversations:write)
+    #[command(
+        long_about = r#"Open a direct message or multi-person DM by user ID(s).
+Optionally sends a message immediately to the opened conversation.
+
+Examples:
+  slack open --users U12345678
+  slack open --users U12345678,U87654321 --text "Hello!"
+"#
+    )]
     Open(OpenArgs),
+
     /// List channels/DMs you can see
+    #[command(long_about = r#"List conversations visible to you.
+Supported types: public_channel, private_channel, mpim, im (comma-separated).
+
+Examples:
+  slack channels
+  slack channels --types public_channel,im --limit 50
+"#)]
     Channels(ListArgs),
+
     /// List recent messages in a channel
+    #[command(long_about = r#"Show recent messages for a channel or DM by ID.
+
+Examples:
+  slack msgs --channel C12345678 --limit 10
+  slack msgs --channel D23456789
+"#)]
     Msgs(MsgsArgs),
+
     /// Send a message
+    #[command(long_about = r#"Post a message to a channel or DM by ID.
+Use --thread-ts to reply in an existing thread.
+
+Examples:
+  slack send --channel C12345678 --text "Hello from mdslackcli"
+  slack send --channel C12345678 --text "Thread reply" --thread-ts 1712345678.000100
+"#)]
     Send(SendArgs),
 }
 
@@ -129,6 +244,12 @@ struct AuthTest {
 }
 
 fn main() -> Result<()> {
+    // If called with top-level --help/-h (no subcommand), print a full, AI-friendly help.
+    if should_print_full_help() {
+        print_full_help();
+        return Ok(());
+    }
+
     let cli = Cli::parse();
     match cli.command {
         Commands::Init(args) => init(args),
@@ -378,6 +499,66 @@ fn main() -> Result<()> {
                 Err(anyhow!("Slack error: {err}"))
             }
         }
+    }
+}
+
+fn should_print_full_help() -> bool {
+    // Detect a top-level help request: `slack --help` or `slack -h` without a subcommand.
+    // Keep subcommand help (`slack <cmd> --help`) handled by clap as usual.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if !args.iter().any(|a| a == "--help" || a == "-h") {
+        return false;
+    }
+    // Known subcommands (kept in sync with `Commands` names; all lowercase).
+    let subs = [
+        "init",
+        "whoami",
+        "join",
+        "directmsgs",
+        "direct-msgs",
+        "directmpmsgs",
+        "direct-mp-msgs",
+        "findperson",
+        "find-person",
+        "open",
+        "channels",
+        "msgs",
+        "send",
+    ];
+    let has_sub = args.iter().any(|a| subs.contains(&a.as_str()));
+    !has_sub
+}
+
+fn print_full_help() {
+    // Render combined help: top-level long help + each subcommand's long help and examples.
+    let mut top = Cli::command();
+    // Header
+    let name = top.get_name().to_string();
+    let ver = top.get_version().unwrap_or("");
+    println!("{name} {ver}");
+    println!();
+    // Top-level long help
+    let _ = top.print_long_help();
+    println!();
+
+    // Extra, concise examples section to aid discovery
+    println!("\nEXAMPLES:");
+    println!("  {name} init");
+    println!("  {name} whoami");
+    println!("  {name} channels --types public_channel,im --limit 20");
+    println!("  {name} find-person --query Jane");
+    println!("  {name} open --users U123,U456 --text \"Hello\"");
+    println!("  {name} msgs --channel C12345678 --limit 5");
+    println!("  {name} send --channel C12345678 --text \"Hi\"");
+    println!("  {name} send --channel C12345678 --text \"Reply\" --thread-ts 1712345678.000100");
+
+    // Detailed per-command help
+    println!("\nCOMMAND DETAILS:");
+    let mut subs = Cli::command();
+    for sc in subs.get_subcommands_mut() {
+        println!("\n== {} ==", sc.get_name());
+        let _ = sc.print_long_help();
+        println!();
     }
 }
 
