@@ -12,3 +12,8 @@ anyhow = "1.0"
 dialoguer = "0.11"
 # Use Windows Credential Manager
 keyring = { version = "3", features = ["windows-native"] }
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+httpmock = "0.7"

@@ -562,6 +562,10 @@ fn print_full_help() {
     }
 }
 
+fn api_base() -> String {
+    std::env::var("SLACK_API_BASE").unwrap_or_else(|_| API_BASE.to_string())
+}
+
 /// --- Init & credential helpers ---
 fn init(args: InitArgs) -> Result<()> {
     if args.reset {
@@ -608,6 +612,14 @@ fn init(args: InitArgs) -> Result<()> {
 }
 
 fn ensure_token() -> Result<String> {
+    // Test-friendly: allow env override without keyring interaction
+    if let Ok(t) = std::env::var("SLACK_TOKEN") {
+        let tok = t.trim().to_string();
+        if !tok.is_empty() {
+            return Ok(tok);
+        }
+    }
+
     if let Some(tok) = read_token()? {
         let client = http();
         let info = auth_test(&client, &tok)?;
@@ -659,7 +671,7 @@ fn http() -> Client {
 }
 
 fn auth_test(client: &Client, token: &str) -> Result<AuthTest> {
-    let url = format!("{API_BASE}/auth.test");
+    let url = format!("{}/auth.test", api_base());
     let resp = client
         .post(&url)
         .bearer_auth(token)
@@ -680,7 +692,7 @@ fn slack_post(
     token: &str,
     form: Option<&[(&str, &str)]>,
 ) -> Result<Value> {
-    let url = format!("{API_BASE}/{method}");
+    let url = format!("{}/{}", api_base(), method);
     let resp = client
         .post(&url)
         .bearer_auth(token)
