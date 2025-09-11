@@ -22,4 +22,3 @@ fn send_help_is_scoped() {
         .stdout(predicate::str::contains("Post a message to a channel"))
         .stdout(predicate::str::contains("COMMAND DETAILS:").not());
 }
-

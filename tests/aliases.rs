@@ -18,9 +18,9 @@ fn aliases_for_direct_msgs() {
     for sub in ["directmsgs", "direct-msgs"] {
         let mut cmd = Command::cargo_bin("mdslackcli").unwrap();
         cmd.args([sub, "--help"]);
-        cmd.assert()
-            .success()
-            .stdout(predicate::str::contains("direct message (IM) conversations"));
+        cmd.assert().success().stdout(predicate::str::contains(
+            "direct message (IM) conversations",
+        ));
     }
 }
 
@@ -34,4 +34,3 @@ fn aliases_for_direct_mp_msgs() {
             .stdout(predicate::str::contains("multi-person direct message"));
     }
 }
-

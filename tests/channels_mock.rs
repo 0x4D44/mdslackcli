@@ -10,7 +10,8 @@ fn channels_lists_public_and_im() {
     // auth.test
     let _m_auth = server.mock(|when, then| {
         when.method(POST).path("/api/auth.test");
-        then.status(200).json_body(serde_json::json!({ "ok": true }));
+        then.status(200)
+            .json_body(serde_json::json!({ "ok": true }));
     });
 
     // conversations.list
@@ -38,4 +39,3 @@ fn channels_lists_public_and_im() {
         .stdout(predicate::str::contains("(public_channel)"))
         .stdout(predicate::str::contains("D1\t#(dm or unnamed)\t(im)"));
 }
-

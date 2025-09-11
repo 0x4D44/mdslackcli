@@ -9,16 +9,14 @@ fn whoami_uses_api_base_and_token_from_env() {
 
     // Stub auth.test
     let _m = server.mock(|when, then| {
-        when.method(POST)
-            .path("/api/auth.test");
-        then.status(200)
-            .json_body(serde_json::json!({
-                "ok": true,
-                "team": "Acme Co",
-                "team_id": "T123",
-                "user_id": "U234",
-                "bot_id": null
-            }));
+        when.method(POST).path("/api/auth.test");
+        then.status(200).json_body(serde_json::json!({
+            "ok": true,
+            "team": "Acme Co",
+            "team_id": "T123",
+            "user_id": "U234",
+            "bot_id": null
+        }));
     });
 
     let api_base = format!("{}/api", server.base_url());
@@ -34,4 +32,3 @@ fn whoami_uses_api_base_and_token_from_env() {
         .stdout(predicate::str::contains("team_id: Some(\"T123\")"))
         .stdout(predicate::str::contains("user_id: Some(\"U234\")"));
 }
-
