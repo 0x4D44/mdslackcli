@@ -2,11 +2,11 @@ name: Windows Build & Release
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master, main ]
     tags:
       - 'v*'
   pull_request:
-    branches: [ main ]
+    branches: [ master, main ]
 
 jobs:
   build-windows:
@@ -29,6 +29,9 @@ jobs:
 
       - name: Clippy (deny warnings)
         run: cargo clippy -- -D warnings
+
+      - name: Test
+        run: cargo test --all
 
       - name: Build release
         run: cargo build --release
